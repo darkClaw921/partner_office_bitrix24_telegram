@@ -19,6 +19,10 @@ class Settings:
     bitrix_webhook: str | None = None
     documents_path: Path | None = None
     documents: list = None
+    # Partner field configurations
+    partner_contact_code_field: str = "UF_CRM_1763459353553"  # Default value
+    partner_company_code_field: str = "UF_CRM_1763552640092"   # Default value
+    partner_lead_ref_lead: str = "UF_CRM_1763636439"           # Default value
 
 
 def _resolve_database_path(raw_path: str | None) -> Path:
@@ -47,6 +51,11 @@ def get_settings() -> Settings:
     bitrix_webhook = os.getenv("BITRIX_WEBHOOK") or os.getenv("WEBHOOK")
     documents_path = Path(os.getenv("DOCUMENTS_PATH", "app/config/documents.json")) if os.getenv("DOCUMENTS_PATH") else None
     documents = _load_documents(documents_path)
+    
+    # Load Bitrix24 field configurations from environment variables
+    partner_contact_code_field = os.getenv("PARTNER_CONTACT_CODE_FIELD", "UF_CRM_1763459353553")
+    partner_company_code_field = os.getenv("PARTNER_COMPANY_CODE_FIELD", "UF_CRM_1763552640092")
+    partner_lead_ref_lead = os.getenv("PARTNER_LEAD_REF_LEAD", "UF_CRM_1763636439")
 
     return Settings(
         bot_token=bot_token,
@@ -55,4 +64,7 @@ def get_settings() -> Settings:
         bitrix_webhook=bitrix_webhook,
         documents_path=documents_path,
         documents=documents,
+        partner_contact_code_field=partner_contact_code_field,
+        partner_company_code_field=partner_company_code_field,
+        partner_lead_ref_lead=partner_lead_ref_lead,
     )

@@ -19,6 +19,7 @@ class PartnerContact:
     id: int
     partner_code: str
     percent: float | None = None
+    entity_type: str = "C_"  # Added to store whether it's a contact (C_) or company (CO_)
 
 
 class BitrixService:
@@ -100,6 +101,7 @@ class BitrixService:
                 id=int(contact["ID"]),
                 partner_code=partner_code,
                 percent=_extract_percent(contact.get(self._settings.partner_contact_percent_field)),
+                entity_type="C_",  # Contact
             )
 
         return None
@@ -145,6 +147,7 @@ class BitrixService:
                 id=int(company["ID"]),
                 partner_code=partner_code,
                 percent=_extract_percent(company.get(self._settings.partner_company_percent_field)),
+                entity_type="CO_",  # Company
             )
 
         return None

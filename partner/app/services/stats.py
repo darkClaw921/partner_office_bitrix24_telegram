@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from logging import Logger
 from typing import Literal
 
 from app.config import get_settings
@@ -29,19 +30,55 @@ STAGE_SUCCESS = {"WON", "SUCCESS"}
 STAGE_FAILED = {"LOSE", "FAILED"}
 
 
+async def _get_partner_binding(partner_id: int, service: BitrixService, entity_type: str | None = None) -> str:
+    """
+    Определение формата привязки партнера в зависимости от типа (контакт или компания).
+    Возвращает строку в формате "C_<id>" для контакта или "CO_<id>" для компании.
+    If entity_type is provided, use it instead of making API calls.
+    """
+    # If we already know the entity type, use it
+    if entity_type == "C_":
+        return f"C_{partner_id}"
+    elif entity_type == "CO_":
+        return f"CO_{partner_id}"
+    elif entity_type is not None:
+        # For backward compatibility, if entity_type is something else but not None
+        return f"{entity_type}{partner_id}"
+    
+    # Otherwise, determine by making API calls (backward compatibility)
+    # Проверяем, является ли partner_id контактом
+    contact_result = await service.call("crm.contact.get", {"id": partner_id})
+    if contact_result and isinstance(contact_result, dict) and "error" not in contact_result:
+        # Это контакт
+        return f"C_{partner_id}"
+    
+    # Проверяем, является ли partner_id компанией
+    company_result = await service.call("crm.company.get", {"id": partner_id})
+    if company_result and isinstance(company_result, dict) and "error" not in company_result:
+        # Это компания
+        return f"CO_{partner_id}"
+    
+    # По умолчанию считаем контактом (обратная совместимость)
+    return f"C_{partner_id}"
+
+
 async def fetch_deal_stats(
-    partner_contact_id: int,
+    partner_id: int,
     range_key: StatsRange,
     service: BitrixService | None = None,
+    entity_type: str | None = None  # Added entity_type parameter
 ) -> DealStats:
     client = service or get_bitrix_service()
     date_from = _resolve_date_from(range_key)
     settings = get_settings()
+    
+    # Определяем формат привязки партнера
+    partner_binding = await _get_partner_binding(partner_id, client, entity_type)
 
-    filter_payload: dict[str, object] = {settings.partner_deal_ref_field: partner_contact_id}
+    filter_payload: dict[str, object] = {settings.partner_deal_ref_field: partner_binding}
     if date_from:
         filter_payload[">=DATE_CREATE"] = date_from.isoformat()
-
+    print(filter_payload)
     deals = await client.get_all("crm.deal.list", params={"filter": filter_payload, "select": ["STAGE_ID", "OPPORTUNITY"]})
     stats = DealStats.empty()
     for deal in deals:
@@ -68,4 +105,3 @@ def _resolve_date_from(range_key: StatsRange) -> datetime | None:
         start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         return start_of_day - timedelta(days=7)
     return None
-

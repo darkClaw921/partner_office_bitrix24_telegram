@@ -12,7 +12,7 @@ from app.bot.keyboards import consent_keyboard, documents_keyboard, hide_keyboar
 from app.config import get_settings
 from app.db.database import Database
 from app.utils.validators import is_valid_name, is_valid_phone, normalize_phone
-from app.utils.workBitrix24 import BitrixNotConfiguredError, create_deal
+from app.utils.workBitrix24 import BitrixNotConfiguredError, create_lead  # Changed from create_deal
 
 
 router = Router(name="user_bot")
@@ -194,10 +194,10 @@ async def _process_phone(phone_raw: str, message: Message, state: FSMContext, db
         return
 
     try:
-        bitrix_deal_id = await create_deal(name, phone, partner_code)
-        await db.save_request(user_id, partner_code, name, phone, bitrix_deal_id)
+        bitrix_lead_id = await create_lead(name, phone, partner_code)  # Changed from create_deal
+        await db.save_request(user_id, partner_code, name, phone, bitrix_lead_id)  # Still using bitrix_deal_id field
         await message.answer(
-            f"Заявка создана! Сделка в Bitrix: {bitrix_deal_id}\n"
+            f"Заявка создана! Лид в Bitrix: {bitrix_lead_id}\n"  # Changed text from "Сделка" to "Лид"
             f"Менеджер свяжется с вами по телефону {phone}.",
             reply_markup=main_keyboard,
         )
@@ -206,7 +206,7 @@ async def _process_phone(phone_raw: str, message: Message, state: FSMContext, db
         await message.answer("Ошибка: Bitrix не настроен. Свяжитесь с администратором.")
         await state.clear()
     except Exception as e:
-        logger.error(f"Ошибка создания сделки: {e}")
+        logger.error(f"Ошибка создания лида: {e}")  # Changed from "сделки" to "лида"
         await message.answer("Ошибка при создании заявки. Попробуйте позже.")
         await state.clear()
 

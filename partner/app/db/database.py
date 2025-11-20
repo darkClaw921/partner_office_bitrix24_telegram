@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS partner_requests (
     phone_number TEXT NOT NULL,
     partner_code TEXT NOT NULL,
     bitrix_contact_id INTEGER,
+    bitrix_entity_type TEXT,  -- Added to store whether it's a contact or company
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_partner_requests_user ON partner_requests (user_id);
@@ -52,6 +53,15 @@ class Database:
         except aiosqlite.OperationalError as exc:
             if "duplicate column name" not in str(exc):
                 raise
+        # Add the new column for entity type
+        try:
+            await self._connection.execute(
+                "ALTER TABLE partner_requests ADD COLUMN bitrix_entity_type TEXT"
+            )
+            logger.info("Добавлен столбец bitrix_entity_type в partner_requests")
+        except aiosqlite.OperationalError as exc:
+            if "duplicate column name" not in str(exc):
+                raise
         await self._ensure_unique_user_constraint()
 
     async def _ensure_unique_user_constraint(self) -> None:
@@ -75,7 +85,7 @@ class Database:
         self._connection = None
         logger.info("SQLite соединение закрыто")
 
-    async def save_submission(self, submission: PartnerSubmission) -> None:
+    async def save_submission(self, submission: PartnerSubmission, entity_type: str | None = None) -> None:
         if self._connection is None:
             raise RuntimeError("Соединение с базой данных не установлено")
 
@@ -89,8 +99,9 @@ class Database:
                     last_name,
                     phone_number,
                     partner_code,
-                    bitrix_contact_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    bitrix_contact_id,
+                    bitrix_entity_type
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     submission.user_id,
@@ -100,6 +111,7 @@ class Database:
                     submission.phone_number,
                     submission.partner_code,
                     submission.bitrix_contact_id,
+                    entity_type,  # Store the entity type (C_ or CO_)
                 ),
             )
             await self._connection.commit()
@@ -115,7 +127,7 @@ class Database:
             raise RuntimeError("Соединение с базой данных не установлено")
 
         query = """
-            SELECT user_id, username, first_name, last_name, phone_number, partner_code, bitrix_contact_id, created_at
+            SELECT user_id, username, first_name, last_name, phone_number, partner_code, bitrix_contact_id, bitrix_entity_type, created_at
             FROM partner_requests
             WHERE user_id = ?
             LIMIT 1
@@ -131,7 +143,7 @@ class Database:
             raise RuntimeError("Соединение с базой данных не установлено")
 
         query = """
-            SELECT user_id, username, phone_number, partner_code, bitrix_contact_id, created_at
+            SELECT user_id, username, phone_number, partner_code, bitrix_contact_id, bitrix_entity_type, created_at
             FROM partner_requests
             ORDER BY created_at DESC
             LIMIT ?

@@ -19,8 +19,10 @@ from app.utils.validators import (
 )
 from app.utils.workBitrix24 import (
     BitrixNotConfiguredError,
+    PartnerContact,
     fetch_partner_percent,
     find_partner_contact_by_phone,
+    get_bitrix_service,
 )
 
 router = Router(name="partner_registration")
@@ -57,6 +59,7 @@ async def cmd_start(message: Message, state: FSMContext, db: Database) -> None:
             await state.set_state(RegistrationForm.authorized)
             await state.update_data(
                 bitrix_contact_id=int(bitrix_contact_id),
+                bitrix_entity_type=existing_submission.get("bitrix_entity_type"),  # Add entity type
                 partner_percent=partner_percent,
             )
             await message.answer(
@@ -111,9 +114,13 @@ async def _process_phone_value(value: str, message: Message, state: FSMContext) 
         )
         return
 
+    # Use entity type from PartnerContact object
+    entity_type = partner_contact.entity_type
+    
     await state.update_data(
         phone=normalized_phone,
         bitrix_contact_id=partner_contact.id,
+        bitrix_entity_type=entity_type,
         expected_partner_code=partner_contact.partner_code,
         partner_percent=partner_contact.percent,
     )
@@ -154,9 +161,10 @@ async def process_partner_code(message: Message, state: FSMContext, db: Database
         phone_number=phone,
         partner_code=partner_code,
         bitrix_contact_id=int(bitrix_contact_id),
+        bitrix_entity_type=data.get("bitrix_entity_type"),  # Add entity type to submission
     )
 
-    await db.save_submission(submission)
+    await db.save_submission(submission, data.get("bitrix_entity_type"))
     await state.set_state(RegistrationForm.authorized)
     await state.update_data(
         bitrix_contact_id=submission.bitrix_contact_id,
@@ -175,6 +183,7 @@ async def handle_stats_callback(callback: CallbackQuery, state: FSMContext) -> N
     range_key = callback.data.split(":", maxsplit=1)[1]
     data = await state.get_data()
     bitrix_contact_id = data.get("bitrix_contact_id")
+    bitrix_entity_type = data.get("bitrix_entity_type")  # Get entity type
     if not bitrix_contact_id:
         await callback.message.answer("Не удалось определить контакта Bitrix. Авторизуйтесь заново командой /start.")
         await state.clear()
@@ -185,7 +194,8 @@ async def handle_stats_callback(callback: CallbackQuery, state: FSMContext) -> N
         partner_percent = await _safe_fetch_partner_percent(int(bitrix_contact_id))  # type: ignore[arg-type]
         await state.update_data(partner_percent=partner_percent)
 
-    stats = await fetch_deal_stats(int(bitrix_contact_id), range_key)  # type: ignore[arg-type]
+    # Pass entity type to fetch_deal_stats
+    stats = await fetch_deal_stats(int(bitrix_contact_id), range_key, entity_type=bitrix_entity_type)  # type: ignore[arg-type]
     await callback.message.answer(
         _format_stats(range_key, stats, partner_percent),
         reply_markup=stats_keyboard(),

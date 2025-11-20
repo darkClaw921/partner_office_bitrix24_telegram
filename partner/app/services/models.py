@@ -13,5 +13,5 @@ class PartnerSubmission:
     phone_number: str
     partner_code: str
     bitrix_contact_id: int | None = None
+    bitrix_entity_type: str | None = None  # Added to store whether it's a contact (C_) or company (CO_)
     created_at: datetime | None = None
-
