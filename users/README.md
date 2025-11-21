@@ -3,15 +3,12 @@
 
 ## Требования
 - Python 3.12+
-- Установленный `pip`/`uv`
+- Установленный `uv`
 - Токен Telegram-бота от [@BotFather](https://t.me/BotFather)
 
 ## Установка
 ```bash
-cd users
-python -m venv .venv
-source .venv/bin/activate  # или .venv\Scripts\activate на Windows
-pip install -e .
+uv sync
 ```
 
 ## Настройка окружения
@@ -25,7 +22,7 @@ pip install -e .
 
 ## Запуск бота
 ```bash
-python main.py
+uv run main.py
 ```
 
 При старте бот:
