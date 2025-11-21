@@ -116,7 +116,8 @@ async def _process_phone_value(value: str, message: Message, state: FSMContext) 
 
     # Use entity type from PartnerContact object
     entity_type = partner_contact.entity_type
-    
+    logger.info(f"PARTNER_CODE: {partner_contact.partner_code}")
+
     await state.update_data(
         phone=normalized_phone,
         bitrix_contact_id=partner_contact.id,
@@ -144,12 +145,16 @@ async def process_partner_code(message: Message, state: FSMContext, db: Database
     phone = data.get("phone")
     expected_code = data.get("expected_partner_code")
     bitrix_contact_id = data.get("bitrix_contact_id")
+    
+    if expected_code is not None:
+        expected_code = normalize_partner_code(expected_code)
     if not phone or not expected_code or not bitrix_contact_id:
         await message.answer("Не удалось найти номер телефона, начните заново командой /start.")
         await state.clear()
         return
 
     if partner_code != expected_code:
+        logger.error(f"Код не совпадает с указанным в Bitrix24. expected_code: {expected_code}, partner_code: {partner_code}")
         await message.answer("Код не совпадает с указанным в Bitrix24. Попробуйте снова.")
         return
 
