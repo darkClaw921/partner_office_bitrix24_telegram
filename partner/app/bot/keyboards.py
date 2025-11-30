@@ -37,3 +37,26 @@ def stats_keyboard() -> InlineKeyboardMarkup:
         ]
     )
 
+
+def detailed_stats_keyboard(range_key: str) -> InlineKeyboardMarkup:
+    """Клавиатура с кнопкой детальной статистики для выбранного периода."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📋 Детальная статистика",
+                    callback_data=f"detailed_stats:{range_key}"
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="📊 Сегодня", callback_data="stats:today"),
+            ],
+            [
+                InlineKeyboardButton(text="📈 Неделя", callback_data="stats:week"),
+            ],
+            [
+                InlineKeyboardButton(text="📆 Всё время", callback_data="stats:all"),
+            ]
+        ]
+    )
+

@@ -7,10 +7,20 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 from loguru import logger
 
-from app.bot.keyboards import hide_keyboard, request_phone_keyboard, stats_keyboard
+from app.bot.keyboards import (
+    detailed_stats_keyboard,
+    hide_keyboard,
+    request_phone_keyboard,
+    stats_keyboard,
+)
 from app.db.database import Database
 from app.services.models import PartnerSubmission
-from app.services.stats import DealStats, fetch_deal_stats
+from app.services.stats import (
+    DealStats,
+    DetailedStats,
+    fetch_deal_stats,
+    fetch_detailed_stats,
+)
 from app.utils.validators import (
     is_valid_partner_code,
     is_valid_phone,
@@ -203,7 +213,7 @@ async def handle_stats_callback(callback: CallbackQuery, state: FSMContext) -> N
     stats = await fetch_deal_stats(int(bitrix_contact_id), range_key, entity_type=bitrix_entity_type)  # type: ignore[arg-type]
     await callback.message.answer(
         _format_stats(range_key, stats, partner_percent),
-        reply_markup=stats_keyboard(),
+        reply_markup=detailed_stats_keyboard(range_key),
     )
 
 
@@ -226,6 +236,64 @@ def _format_stats(range_key: str, stats: DealStats, partner_percent: float | Non
         f"Итого: {stats.total_amount:.2f}"
         f"{partner_line}"
     )
+
+
+@router.callback_query(F.data.startswith("detailed_stats:"), RegistrationForm.authorized)
+async def handle_detailed_stats_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    range_key = callback.data.split(":", maxsplit=1)[1]
+    data = await state.get_data()
+    bitrix_contact_id = data.get("bitrix_contact_id")
+    bitrix_entity_type = data.get("bitrix_entity_type")
+    if not bitrix_contact_id:
+        await callback.message.answer("Не удалось определить контакта Bitrix. Авторизуйтесь заново командой /start.")
+        await state.clear()
+        return
+
+    try:
+        detailed_stats = await fetch_detailed_stats(
+            int(bitrix_contact_id),
+            range_key,
+            entity_type=bitrix_entity_type  # type: ignore[arg-type]
+        )
+        message_text = _format_detailed_stats(range_key, detailed_stats)
+        await callback.message.answer(
+            message_text,
+            reply_markup=detailed_stats_keyboard(range_key),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Ошибка при получении детальной статистики")
+        await callback.message.answer(
+            f"Не удалось получить детальную статистику: {str(e)}",
+            reply_markup=detailed_stats_keyboard(range_key),
+        )
+
+
+def _format_detailed_stats(range_key: str, detailed_stats: DetailedStats) -> str:
+    """Форматирует детальную статистику для отображения."""
+    titles = {
+        "today": "Детальная статистика за сегодня",
+        "week": "Детальная статистика за неделю",
+        "all": "Детальная статистика за всё время",
+    }
+    title = titles.get(range_key, "Детальная статистика")
+    
+    if not detailed_stats.clients:
+        return f"{title}\n\nСделки не найдены."
+    
+    lines = [title, ""]
+    
+    # Display detailed stats for each client in the same format as main stats
+    for client in detailed_stats.clients:
+        lines.append(f"👤 {client.client_name}")
+        lines.append(f"В работе: {client.deals_in_progress} (сумма {client.in_progress_amount:.2f})")
+        lines.append(f"Успешно: {client.deals_success} (сумма {client.success_amount:.2f})")
+        lines.append(f"Провалено: {client.deals_failed} (сумма {client.failed_amount:.2f})")
+        lines.append(f"Итого: {client.total_amount:.2f}")
+        
+        lines.append("")
+    
+    return "\n".join(lines)
 
 
 async def _safe_fetch_partner_percent(contact_id: int) -> float | None:
