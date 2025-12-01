@@ -1,0 +1,13 @@
+[project]
+name = "partner-office-bitrix24-telegram"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fast-bitrix24>=1.8.11",
+    "loguru==0.7.3",
+    "python-dotenv==1.2.1",
+    "fastapi",
+    "uvicorn",
+]
