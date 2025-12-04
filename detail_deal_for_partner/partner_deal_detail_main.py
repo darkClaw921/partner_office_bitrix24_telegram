@@ -1,6 +1,7 @@
 import json
 import os
 from urllib.parse import parse_qs
+from typing import Dict
 
 from dotenv import load_dotenv
 from fast_bitrix24 import BitrixAsync
@@ -17,6 +18,9 @@ app = FastAPI()
 PARTNER_DEAL_REF_FIELD = os.getenv("PARTNER_DEAL_REF_DEAL", "UF_CRM_1763470519")
 
 domain=os.getenv("WEBHOOK").split("/")[2]
+
+# Кэш для статусов воронок
+_stage_cache: Dict[str, Dict[str, str]] = {}
 async def _parse_request_data(request: Request) -> dict:
     """Парсинг тела запроса: JSON -> form-urlencoded -> raw/querystring.
     Возвращает словарь, гарантируя устойчивость к неверному Content-Type.
@@ -47,6 +51,55 @@ async def _parse_request_data(request: Request) -> dict:
 
     # 4) Пусто
     return {}
+
+
+async def get_deal_stages(category_id: str, bitrix: BitrixAsync) -> Dict[str, str]:
+    """
+    Получение статусов сделок для указанной воронки.
+    
+    Args:
+        category_id: ID воронки (0 для основной воронки)
+        bitrix: Экземпляр BitrixAsync
+        
+    Returns:
+        Словарь {STAGE_ID: название стадии}
+    """
+    global _stage_cache
+    
+    # Формируем entityId: для воронки 0 - DEAL_STAGE, для других - DEAL_STAGE_<id>
+    if not category_id or category_id == "0" or category_id == 0 or str(category_id).strip() == "":
+        entity_id = "DEAL_STAGE"
+    else:
+        entity_id = f"DEAL_STAGE_{category_id}"
+    
+    # Проверяем кэш
+    if entity_id in _stage_cache:
+        return _stage_cache[entity_id]
+    
+    try:
+        logger.info(f"Получение статусов для воронки {category_id} (entityId: {entity_id})")
+        stages = await bitrix.get_all("crm.status.entity.items", {"entityId": entity_id})
+        
+        if stages and isinstance(stages, list):
+            stage_map = {}
+            
+            for stage in stages:
+                stage_id = stage.get("STATUS_ID", "")
+                stage_name = stage.get("NAME", stage_id)
+                if stage_id:
+                    stage_map[stage_id] = stage_name
+            
+            # Сохраняем в кэш
+            _stage_cache[entity_id] = stage_map
+            logger.info(f"Получено {len(stage_map)} статусов для воронки {category_id} (entityId: {entity_id})")
+            return stage_map
+        else:
+            logger.warning(f"Не удалось получить статусы для воронки {category_id}: пустой результат")
+            return {}
+            
+    except Exception as e:
+        logger.error(f"Ошибка получения статусов для воронки {category_id}: {e}")
+        return {}
 
 
 async def get_contact_info(contact_id: str, bitrix: BitrixAsync) -> dict:
@@ -147,6 +200,7 @@ async def get_contact_deals(contact_id: str, bitrix: BitrixAsync, domain: str = 
                     "ID",
                     "TITLE",
                     "STAGE_ID",
+                    "CATEGORY_ID",
                     "OPPORTUNITY",
                     "CURRENCY_ID",
                     "DATE_CREATE",
@@ -195,6 +249,7 @@ async def get_company_deals(company_id: str, bitrix: BitrixAsync, domain: str = 
                     "ID",
                     "TITLE",
                     "STAGE_ID",
+                    "CATEGORY_ID",
                     "OPPORTUNITY",
                     "CURRENCY_ID",
                     "DATE_CREATE",
@@ -304,6 +359,17 @@ async def bitrix24_webhook(request: Request):
     # Получаем домен из данных запроса
     member_id = data.get('member_id', '')
     
+    # Получаем статусы для всех уникальных воронок
+    category_ids = set()
+    for deal in deals:
+        category_id = deal.get("CATEGORY_ID", "0")
+        category_ids.add(str(category_id))
+    
+    # Загружаем статусы для всех воронок
+    stages_map: Dict[str, Dict[str, str]] = {}
+    for cat_id in category_ids:
+        stages_map[cat_id] = await get_deal_stages(cat_id, bitrix)
+    
     # Формируем HTML со списком сделок
     deals_html = ""
     if deals:
@@ -312,16 +378,20 @@ async def bitrix24_webhook(request: Request):
             title = deal.get("TITLE", f"Сделка #{deal_id}")
             amount = float(deal.get("OPPORTUNITY", 0))
             currency = deal.get("CURRENCY_ID", "RUB")
-            stage = deal.get("STAGE_ID", "")
+            stage_id = deal.get("STAGE_ID", "")
+            category_id = str(deal.get("CATEGORY_ID", "0"))
+            
+            # Получаем название стадии
+            stage_name = stages_map.get(category_id, {}).get(stage_id, stage_id)
 
             # Формируем ссылку на сделку
             deal_url = f"https://{domain}/crm/deal/details/{deal_id}/" if member_id else "#"
             
             # Определяем цвет стадии
             stage_color = "#3498db"  # По умолчанию синий
-            if "WON" in stage.upper() or "SUCCESS" in stage.upper():
+            if "WON" in stage_id.upper() or "SUCCESS" in stage_id.upper():
                 stage_color = "#2ecc71"  # Зеленый для выигранных
-            elif "LOSE" in stage.upper() or "FAIL" in stage.upper():
+            elif "LOSE" in stage_id.upper() or "FAIL" in stage_id.upper():
                 stage_color = "#e74c3c"  # Красный для проигранных
             
             deals_html += f"""
@@ -334,7 +404,7 @@ async def bitrix24_webhook(request: Request):
                     <div class="deal-meta">
                         <span class="deal-id">ID: {deal_id}</span>
                     <span class="deal-stage" style="background-color: {stage_color}20; color: {stage_color};">
-                        {stage}
+                        {stage_name}
                     </span>
                     </div>
                 </div>
@@ -561,3 +631,5 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+    # import asyncio
+    # asyncio.run(get_deal_stages("0", BitrixAsync(os.getenv("WEBHOOK"))))
