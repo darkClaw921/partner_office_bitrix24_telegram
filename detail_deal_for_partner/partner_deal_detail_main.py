@@ -16,11 +16,13 @@ app = FastAPI()
 
 # Получаем название поля из переменных окружения
 PARTNER_DEAL_REF_FIELD = os.getenv("PARTNER_DEAL_REF_DEAL", "UF_CRM_1763470519")
+PARTNER_LEAD_REF_FIELD = os.getenv("PARTNER_LEAD_REF_LEAD", "UF_CRM_1763569075")
 
 domain=os.getenv("WEBHOOK").split("/")[2]
 
-# Кэш для статусов воронок
+# Кэш для статусов воронок и лидов
 _stage_cache: Dict[str, Dict[str, str]] = {}
+_lead_status_cache: Dict[str, str] = {}
 async def _parse_request_data(request: Request) -> dict:
     """Парсинг тела запроса: JSON -> form-urlencoded -> raw/querystring.
     Возвращает словарь, гарантируя устойчивость к неверному Content-Type.
@@ -268,6 +270,145 @@ async def get_company_deals(company_id: str, bitrix: BitrixAsync, domain: str = 
         return []
 
 
+async def get_lead_statuses(bitrix: BitrixAsync) -> Dict[str, str]:
+    """
+    Получение статусов лидов.
+    
+    Args:
+        bitrix: Экземпляр BitrixAsync
+        
+    Returns:
+        Словарь {STATUS_ID: название статуса}
+    """
+    global _lead_status_cache
+    
+    # Проверяем кэш
+    if _lead_status_cache:
+        return _lead_status_cache
+    
+    try:
+        logger.info("Получение статусов лидов")
+        # Для лидов используется entityId: "STATUS"
+        statuses = await bitrix.get_all("crm.status.entity.items", {"entityId": "STATUS"})
+        
+        if statuses and isinstance(statuses, list):
+            status_map = {}
+            
+            for status in statuses:
+                status_id = status.get("STATUS_ID", "")
+                status_name = status.get("NAME", status_id)
+                if status_id:
+                    status_map[status_id] = status_name
+            
+            # Сохраняем в кэш
+            _lead_status_cache = status_map
+            logger.info(f"Получено {len(status_map)} статусов лидов")
+            return status_map
+        else:
+            logger.warning("Не удалось получить статусы лидов: пустой результат")
+            return {}
+            
+    except Exception as e:
+        logger.error(f"Ошибка получения статусов лидов: {e}")
+        return {}
+
+
+async def get_contact_leads(contact_id: str, bitrix: BitrixAsync, domain: str = "") -> list[dict]:
+    """
+    Получение всех лидов, где контакт указан в поле PARTNER_LEAD_REF_FIELD.
+    
+    Args:
+        contact_id: ID контакта
+        bitrix: Экземпляр BitrixAsync
+        domain: Домен Битрикс24 для создания ссылок
+        
+    Returns:
+        Список лидов
+    """
+    try:
+        # Формируем значение фильтра в формате C_{contact_id}
+        partner_binding = f"C_{contact_id}"
+        
+        # Фильтр для поиска лидов
+        filter_payload = {PARTNER_LEAD_REF_FIELD: partner_binding}
+        
+        logger.info(f"Поиск лидов с фильтром: {filter_payload}")
+        
+        # Получаем все лиды
+        leads = await bitrix.get_all(
+            "crm.lead.list",
+            params={
+                "filter": filter_payload,
+                "select": [
+                    "ID",
+                    "TITLE",
+                    "STATUS_ID",
+                    "OPPORTUNITY",
+                    "CURRENCY_ID",
+                    "DATE_CREATE",
+                    "COMPANY_ID",
+                    "CONTACT_ID"
+                ]
+            }
+        )
+        
+        logger.info(f"Найдено лидов: {len(leads) if leads else 0}")
+        
+        return leads if leads else []
+                
+    except Exception as e:
+        logger.error(f"Ошибка получения лидов для контакта #{contact_id}: {e}")
+        return []
+
+
+async def get_company_leads(company_id: str, bitrix: BitrixAsync, domain: str = "") -> list[dict]:
+    """
+    Получение всех лидов, где компания указана в поле PARTNER_LEAD_REF_FIELD.
+    
+    Args:
+        company_id: ID компании
+        bitrix: Экземпляр BitrixAsync
+        domain: Домен Битрикс24 для создания ссылок
+        
+    Returns:
+        Список лидов
+    """
+    try:
+        # Формируем значение фильтра в формате CO_{company_id}
+        partner_binding = f"CO_{company_id}"
+        
+        # Фильтр для поиска лидов
+        filter_payload = {PARTNER_LEAD_REF_FIELD: partner_binding}
+        
+        logger.info(f"Поиск лидов с фильтром: {filter_payload}")
+        
+        # Получаем все лиды
+        leads = await bitrix.get_all(
+            "crm.lead.list",
+            params={
+                "filter": filter_payload,
+                "select": [
+                    "ID",
+                    "TITLE",
+                    "STATUS_ID",
+                    "OPPORTUNITY",
+                    "CURRENCY_ID",
+                    "DATE_CREATE",
+                    "COMPANY_ID",
+                    "CONTACT_ID"
+                ]
+            }
+        )
+        
+        logger.info(f"Найдено лидов: {len(leads) if leads else 0}")
+        
+        return leads if leads else []
+                
+    except Exception as e:
+        logger.error(f"Ошибка получения лидов для компании #{company_id}: {e}")
+        return []
+
+
 def format_currency(amount: float, currency: str = "RUB") -> str:
     """Форматирование суммы с валютой."""
     currency_symbols = {
@@ -341,13 +482,15 @@ async def bitrix24_webhook(request: Request):
     # Получаем информацию о контакте или компании
     if placement == 'CRM_CONTACT_DETAIL_TAB':
         entity_info = await get_contact_info(entity_id, bitrix)
-        # Получаем все сделки контакта
+        # Получаем все сделки и лиды контакта
         deals = await get_contact_deals(entity_id, bitrix, domain)
+        leads = await get_contact_leads(entity_id, bitrix, domain)
         entity_type = "контакта"
     elif placement == 'CRM_COMPANY_DETAIL_TAB':
         entity_info = await get_company_info(entity_id, bitrix)
-        # Получаем все сделки компании
+        # Получаем все сделки и лиды компании
         deals = await get_company_deals(entity_id, bitrix, domain)
+        leads = await get_company_leads(entity_id, bitrix, domain)
         entity_type = "компании"
     else:
         logger.error(f"Неизвестный тип размещения: {placement}")
@@ -369,6 +512,9 @@ async def bitrix24_webhook(request: Request):
     stages_map: Dict[str, Dict[str, str]] = {}
     for cat_id in category_ids:
         stages_map[cat_id] = await get_deal_stages(cat_id, bitrix)
+    
+    # Получаем статусы лидов
+    lead_statuses = await get_lead_statuses(bitrix)
     
     # Формируем HTML со списком сделок
     deals_html = ""
@@ -418,6 +564,53 @@ async def bitrix24_webhook(request: Request):
         </div>
         """
     
+    # Формируем HTML со списком лидов
+    leads_html = ""
+    if leads:
+        for lead in leads:
+            lead_id = lead.get("ID", "")
+            title = lead.get("TITLE", f"Лид #{lead_id}")
+            amount = float(lead.get("OPPORTUNITY", 0))
+            currency = lead.get("CURRENCY_ID", "RUB")
+            status_id = lead.get("STATUS_ID", "")
+            
+            # Получаем название статуса
+            status_name = lead_statuses.get(status_id, status_id)
+
+            # Формируем ссылку на лид
+            lead_url = f"https://{domain}/crm/lead/details/{lead_id}/" if member_id else "#"
+            
+            # Определяем цвет статуса
+            status_color = "#3498db"  # По умолчанию синий
+            if "CONVERTED" in status_id.upper() or "SUCCESS" in status_id.upper():
+                status_color = "#2ecc71"  # Зеленый для конвертированных
+            elif "JUNK" in status_id.upper() or "FAIL" in status_id.upper():
+                status_color = "#e74c3c"  # Красный для некачественных
+            
+            leads_html += f"""
+            <a href="{lead_url}" class="deal-card-link" target="_blank">
+                <div class="deal-card">
+                    <div class="deal-header">
+                        <div class="deal-title">{title}</div>
+                        <div class="deal-amount">{format_currency(amount, currency)}</div>
+                    </div>
+                    <div class="deal-meta">
+                        <span class="deal-id">ID: {lead_id}</span>
+                    <span class="deal-stage" style="background-color: {status_color}20; color: {status_color};">
+                        {status_name}
+                    </span>
+                    </div>
+                </div>
+            </a>
+            """
+    else:
+        leads_html = """
+        <div class="no-deals">
+            <p>📋 Лидов не найдено</p>
+            <p class="hint">У этой сущности пока нет лидов в качестве партнера</p>
+        </div>
+        """
+    
     # Формируем HTML ответ
     html_content = f"""
     <!DOCTYPE html>
@@ -459,26 +652,77 @@ async def bitrix24_webhook(request: Request):
                 font-size: 14px;
             }}
             
-            .deals-count {{
-                background: white;
-                padding: 16px 20px;
-                border-radius: 8px;
+            .accordion {{
                 margin-bottom: 16px;
+            }}
+            
+            .accordion-item {{
+                background: white;
+                border-radius: 12px;
+                margin-bottom: 12px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+                overflow: hidden;
+            }}
+            
+            .accordion-header {{
+                padding: 20px;
+                cursor: pointer;
                 display: flex;
                 justify-content: space-between;
                 align-items: center;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+                transition: background-color 0.2s;
+                user-select: none;
             }}
             
-            .deals-count-label {{
-                color: #7f8c8d;
+            .accordion-header:hover {{
+                background-color: #f8f9fa;
+            }}
+            
+            .accordion-header.active {{
+                background-color: #f0f0f0;
+            }}
+            
+            .accordion-title {{
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                font-size: 18px;
+                font-weight: 600;
+                color: #2c3e50;
+            }}
+            
+            .accordion-count {{
+                background: #667eea;
+                color: white;
+                padding: 4px 12px;
+                border-radius: 12px;
                 font-size: 14px;
+                font-weight: 600;
             }}
             
-            .deals-count-value {{
-                font-size: 24px;
-                font-weight: 700;
+            .accordion-icon {{
+                transition: transform 0.3s;
+                font-size: 20px;
                 color: #667eea;
+            }}
+            
+            .accordion-header.active .accordion-icon {{
+                transform: rotate(180deg);
+            }}
+            
+            .accordion-content {{
+                max-height: 0;
+                overflow: hidden;
+                transition: max-height 0.3s ease-out;
+            }}
+            
+            .accordion-content.active {{
+                max-height: 5000px;
+                transition: max-height 0.5s ease-in;
+            }}
+            
+            .accordion-body {{
+                padding: 0 20px 20px 20px;
             }}
             
             .deal-card-link {{
@@ -561,19 +805,68 @@ async def bitrix24_webhook(request: Request):
                 font-size: 14px;
             }}
         </style>
+        <script>
+            function toggleAccordion(element) {{
+                const header = element;
+                const content = header.nextElementSibling;
+                const isActive = header.classList.contains('active');
+                
+                // Закрываем все другие accordion
+                document.querySelectorAll('.accordion-header').forEach(h => {{
+                    if (h !== header) {{
+                        h.classList.remove('active');
+                        h.nextElementSibling.classList.remove('active');
+                    }}
+                }});
+                
+                // Переключаем текущий accordion
+                if (isActive) {{
+                    header.classList.remove('active');
+                    content.classList.remove('active');
+                }} else {{
+                    header.classList.add('active');
+                    content.classList.add('active');
+                }}
+            }}
+        </script>
     </head>
     <body>
         <div class="header">
             <h1>👋 {entity_info['name']}</h1>
-            <p>Сделки в качестве партнера {entity_type}</p>
+            <p>Сделки и лиды в качестве партнера {entity_type}</p>
         </div>
         
-        <div class="deals-count">
-            <span class="deals-count-label">Всего сделок:</span>
-            <span class="deals-count-value">{len(deals)}</span>
+        <div class="accordion">
+            <div class="accordion-item">
+                <div class="accordion-header" onclick="toggleAccordion(this)">
+                    <div class="accordion-title">
+                        <span>💼 Сделки</span>
+                        <span class="accordion-count">{len(deals)}</span>
+                    </div>
+                    <span class="accordion-icon">▼</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="accordion-body">
+                        {deals_html}
+                    </div>
+                </div>
+            </div>
+            
+            <div class="accordion-item">
+                <div class="accordion-header" onclick="toggleAccordion(this)">
+                    <div class="accordion-title">
+                        <span>🎯 Лиды</span>
+                        <span class="accordion-count">{len(leads)}</span>
+                    </div>
+                    <span class="accordion-icon">▼</span>
+                </div>
+                <div class="accordion-content">
+                    <div class="accordion-body">
+                        {leads_html}
+                    </div>
+                </div>
+            </div>
         </div>
-        
-        {deals_html}
     </body>
     </html>
     """
