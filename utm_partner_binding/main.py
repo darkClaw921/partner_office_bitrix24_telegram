@@ -19,6 +19,7 @@ app = FastAPI()
 WEBHOOK = os.getenv("WEBHOOK")
 # Токен для формирования webhook URL из домена хука (опционально)
 WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN")
+PORT = os.getenv("PORT", 8002)
 PARTNER_CONTACT_CODE_FIELD = os.getenv("PARTNER_CONTACT_CODE_FIELD", "UF_CRM_1763459353553")
 PARTNER_COMPANY_CODE_FIELD = os.getenv("PARTNER_COMPANY_CODE_FIELD", "UF_CRM_1763552640092")
 PARTNER_DEAL_REF_DEAL = os.getenv("PARTNER_DEAL_REF_DEAL", "UF_CRM_691F06D06BCAE")
@@ -431,5 +432,5 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
 
