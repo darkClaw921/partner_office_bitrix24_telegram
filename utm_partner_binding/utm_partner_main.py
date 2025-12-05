@@ -18,7 +18,7 @@ app = FastAPI()
 # Конфигурация из переменных окружения
 WEBHOOK = os.getenv("WEBHOOK")
 # Токен для формирования webhook URL из домена хука (опционально)
-WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN")
+WEBHOOK_TOKEN = os.getenv("WEBHOOK")
 PORT = int(os.getenv("PORT", 8002))
 PARTNER_CONTACT_CODE_FIELD = os.getenv("PARTNER_CONTACT_CODE_FIELD", "UF_CRM_1763459353553")
 PARTNER_COMPANY_CODE_FIELD = os.getenv("PARTNER_COMPANY_CODE_FIELD", "UF_CRM_1763552640092")
@@ -108,17 +108,7 @@ def _get_webhook_url(data: dict) -> Optional[str]:
     domain_from_hook = data.get("auth[domain]", "")
     member_id = data.get("auth[member_id]", "")
     
-    # Если есть домен из хука и токен в .env, формируем webhook URL
-    if domain_from_hook and WEBHOOK_TOKEN:
-        # Формат: https://domain.bitrix24.ru/rest/user_id/token/
-        webhook_url = f"https://{domain_from_hook}/rest/{member_id}/{WEBHOOK_TOKEN}/"
-        
-        return webhook_url
-    
-   
-    
-    
-    return None
+    return WEBHOOK
 
 
 async def _get_deal_data(deal_id: str, bitrix: BitrixAsync) -> Optional[dict]:
