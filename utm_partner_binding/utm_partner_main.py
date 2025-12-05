@@ -135,7 +135,8 @@ async def _get_lead_data(lead_id: str, bitrix: BitrixAsync) -> Optional[dict]:
     """Получение данных лида по ID."""
     try:
         result = await bitrix.call("crm.lead.get", {"ID": lead_id})
-        
+        if result.get("order0000000000") is not None:
+            result = result.get("order0000000000")
         if result and isinstance(result, dict):
             if "error" in result:
                 logger.error(f"Ошибка получения лида {lead_id}: {result.get('error_description', result.get('error'))}")
