@@ -12,3 +12,4 @@ wheels/
 logs/*
 database.sqlite
 *.log
+.env.copy

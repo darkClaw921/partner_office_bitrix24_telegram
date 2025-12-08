@@ -606,7 +606,7 @@ async def bitrix24_webhook(request: Request):
             if not is_payment_bool:
                 payment_button_html = f"""
                 <button class="payment-button" onclick="markPaymentDone(event, '{deal_id}', {amount}, {partner_percent})">
-                    ✓ Выплата 
+                    Выплатить
                 </button>
                 """
             else:
@@ -630,11 +630,12 @@ async def bitrix24_webhook(request: Request):
                             </div>
                         </div>
                     </a>
-                    <div class="deal-payment-section">
+                    <div class="deal-amounts-section">
+                        <div class="deal-amount">Сумма сделки: {format_currency(amount, currency)}</div>
+                        <div class="deal-bonus">Партнерский бонус: {format_currency(payment_amount, currency)}</div>
                         <div class="deal-payment">
                             {payment_button_html}
                         </div>
-                        <div class="deal-amount">{format_currency(payment_amount, currency)}</div>
                     </div>
                 </div>
             </div>
@@ -868,14 +869,22 @@ async def bitrix24_webhook(request: Request):
                 min-width: 0;
             }}
             
-            .deal-payment-section {{
+            .deal-amounts-section {{
                 display: flex;
-                align-items: center;
-                gap: 12px;
+                flex-direction: column;
+                align-items: flex-end;
+                gap: 8px;
                 flex-shrink: 0;
             }}
             
             .deal-amount {{
+                font-size: 16px;
+                font-weight: 600;
+                color: #2c3e50;
+                white-space: nowrap;
+            }}
+            
+            .deal-bonus {{
                 font-size: 18px;
                 font-weight: 700;
                 color: #27ae60;
