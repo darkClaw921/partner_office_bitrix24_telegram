@@ -6,7 +6,7 @@ from typing import Dict
 from dotenv import load_dotenv
 from fast_bitrix24 import BitrixAsync
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from loguru import logger
 
 # Загружаем переменные окружения
@@ -17,6 +17,9 @@ app = FastAPI()
 # Получаем название поля из переменных окружения
 PARTNER_DEAL_REF_FIELD = os.getenv("PARTNER_DEAL_REF_DEAL", "UF_CRM_1763470519")
 PARTNER_LEAD_REF_FIELD = os.getenv("PARTNER_LEAD_REF_LEAD", "UF_CRM_1763569075")
+PARTNER_IS_PAYMENT_FIELD = os.getenv("PARTNER_IS_PAYMENT", "UF_CRM_1765211983998")
+PARTNER_COMPANY_PERCENT_FIELD = os.getenv("PARTNER_COMPANY_PERCENT_FIELD", "UF_CRM_1763568055347")
+PARTNER_CONTACT_PERCENT_FIELD = os.getenv("PARTNER_CONTACT_PERCENT_FIELD", "UF_CRM_1763569663555")
 
 domain=os.getenv("WEBHOOK").split("/")[2]
 
@@ -129,16 +132,24 @@ async def get_contact_info(contact_id: str, bitrix: BitrixAsync) -> dict:
                 if contact_data.get("LAST_NAME"):
                     name_parts.append(contact_data["LAST_NAME"])
                 
+                # Получаем процент партнера
+                partner_percent = contact_data.get(PARTNER_CONTACT_PERCENT_FIELD, "0")
+                try:
+                    partner_percent = float(partner_percent) if partner_percent else 0.0
+                except (ValueError, TypeError):
+                    partner_percent = 0.0
+                
                 return {
                     "id": contact_id,
-                    "name": " ".join(name_parts) or f"Контакт #{contact_id}"
+                    "name": " ".join(name_parts) or f"Контакт #{contact_id}",
+                    "partner_percent": partner_percent
                 }
         
-        return {"id": contact_id, "name": f"Контакт #{contact_id}"}
+        return {"id": contact_id, "name": f"Контакт #{contact_id}", "partner_percent": 0.0}
                 
     except Exception as e:
         logger.error(f"Ошибка получения данных контакта #{contact_id}: {e}")
-        return {"id": contact_id, "name": f"Контакт #{contact_id}"}
+        return {"id": contact_id, "name": f"Контакт #{contact_id}", "partner_percent": 0.0}
 
 
 async def get_company_info(company_id: str, bitrix: BitrixAsync) -> dict:
@@ -160,16 +171,24 @@ async def get_company_info(company_id: str, bitrix: BitrixAsync) -> dict:
             company_data = result.get('order0000000000', result)
             
             if company_data and "error" not in company_data:
+                # Получаем процент партнера
+                partner_percent = company_data.get(PARTNER_COMPANY_PERCENT_FIELD, "0")
+                try:
+                    partner_percent = float(partner_percent) if partner_percent else 0.0
+                except (ValueError, TypeError):
+                    partner_percent = 0.0
+                
                 return {
                     "id": company_id,
-                    "name": company_data.get("TITLE", f"Компания #{company_id}")
+                    "name": company_data.get("TITLE", f"Компания #{company_id}"),
+                    "partner_percent": partner_percent
                 }
         
-        return {"id": company_id, "name": f"Компания #{company_id}"}
+        return {"id": company_id, "name": f"Компания #{company_id}", "partner_percent": 0.0}
                 
     except Exception as e:
         logger.error(f"Ошибка получения данных компании #{company_id}: {e}")
-        return {"id": company_id, "name": f"Компания #{company_id}"}
+        return {"id": company_id, "name": f"Компания #{company_id}", "partner_percent": 0.0}
 
 
 async def get_contact_deals(contact_id: str, bitrix: BitrixAsync, domain: str = "") -> list[dict]:
@@ -207,7 +226,8 @@ async def get_contact_deals(contact_id: str, bitrix: BitrixAsync, domain: str = 
                     "CURRENCY_ID",
                     "DATE_CREATE",
                     "COMPANY_ID",
-                    "CONTACT_ID"
+                    "CONTACT_ID",
+                    PARTNER_IS_PAYMENT_FIELD
                 ]
             }
         )
@@ -256,7 +276,8 @@ async def get_company_deals(company_id: str, bitrix: BitrixAsync, domain: str = 
                     "CURRENCY_ID",
                     "DATE_CREATE",
                     "COMPANY_ID",
-                    "CONTACT_ID"
+                    "CONTACT_ID",
+                    PARTNER_IS_PAYMENT_FIELD
                 ]
             }
         )
@@ -516,6 +537,35 @@ async def bitrix24_webhook(request: Request):
     # Получаем статусы лидов
     lead_statuses = await get_lead_statuses(bitrix)
     
+    # Рассчитываем статистику по сделкам
+    partner_percent = entity_info.get("partner_percent", 0.0)
+    success_amount = 0.0
+    in_progress_amount = 0.0
+    paid_amount = 0.0
+    success_count = 0
+    in_progress_count = 0
+    default_currency = "RUB"
+    
+    for deal in deals:
+        amount = float(deal.get("OPPORTUNITY", 0))
+        stage_id = deal.get("STAGE_ID", "").upper()
+        is_payment = deal.get(PARTNER_IS_PAYMENT_FIELD, False)
+        currency = deal.get("CURRENCY_ID", "RUB")
+        if not default_currency or default_currency == "RUB":
+            default_currency = currency
+        
+        # Проверяем статус выплаты (только для успешных сделок)
+        if ("WON" in stage_id or "SUCCESS" in stage_id) and (is_payment == "1" or is_payment == "Y" or is_payment is True):
+            paid_amount += amount * (partner_percent / 100) if partner_percent > 0 else 0
+        
+        # Классифицируем сделки
+        if "WON" in stage_id or "SUCCESS" in stage_id:
+            success_amount += amount
+            success_count += 1
+        elif "LOSE" not in stage_id and "FAIL" not in stage_id:
+            in_progress_amount += amount
+            in_progress_count += 1
+    
     # Формируем HTML со списком сделок
     deals_html = ""
     if deals:
@@ -526,6 +576,10 @@ async def bitrix24_webhook(request: Request):
             currency = deal.get("CURRENCY_ID", "RUB")
             stage_id = deal.get("STAGE_ID", "")
             category_id = str(deal.get("CATEGORY_ID", "0"))
+            is_payment = deal.get(PARTNER_IS_PAYMENT_FIELD, False)
+            
+            # Проверяем статус выплаты
+            is_payment_bool = is_payment == "1" or is_payment == "Y" or is_payment is True
             
             # Получаем название стадии
             stage_name = stages_map.get(category_id, {}).get(stage_id, stage_id)
@@ -535,26 +589,44 @@ async def bitrix24_webhook(request: Request):
             
             # Определяем цвет стадии
             stage_color = "#3498db"  # По умолчанию синий
-            if "WON" in stage_id.upper() or "SUCCESS" in stage_id.upper():
+            is_success = "WON" in stage_id.upper() or "SUCCESS" in stage_id.upper()
+            if is_success:
                 stage_color = "#2ecc71"  # Зеленый для выигранных
             elif "LOSE" in stage_id.upper() or "FAIL" in stage_id.upper():
                 stage_color = "#e74c3c"  # Красный для проигранных
             
+            # Кнопка выплаты (активна только для успешных сделок, где выплата не произведена)
+            payment_button_html = ""
+            if is_success:
+                if not is_payment_bool:
+                    payment_button_html = f"""
+                    <button class="payment-button" onclick="markPaymentDone(event, '{deal_id}')">
+                        ✓ Выплата произведена
+                    </button>
+                    """
+                else:
+                    payment_button_html = """
+                    <span class="payment-done">✓ Выплата произведена</span>
+                    """
+            
             deals_html += f"""
-            <a href="{deal_url}" class="deal-card-link" target="_blank">
-                <div class="deal-card">
-                    <div class="deal-header">
-                        <div class="deal-title">{title}</div>
-                        <div class="deal-amount">{format_currency(amount, currency)}</div>
+            <div class="deal-card-wrapper">
+                <a href="{deal_url}" class="deal-card-link" target="_blank">
+                    <div class="deal-card">
+                        <div class="deal-header">
+                            <div class="deal-title">{title}</div>
+                            <div class="deal-amount">{format_currency(amount, currency)}</div>
+                        </div>
+                        <div class="deal-meta">
+                            <span class="deal-id">ID: {deal_id}</span>
+                            <span class="deal-stage" style="background-color: {stage_color}20; color: {stage_color};">
+                                {stage_name}
+                            </span>
+                        </div>
                     </div>
-                    <div class="deal-meta">
-                        <span class="deal-id">ID: {deal_id}</span>
-                    <span class="deal-stage" style="background-color: {stage_color}20; color: {stage_color};">
-                        {stage_name}
-                    </span>
-                    </div>
-                </div>
-            </a>
+                </a>
+                {payment_button_html}
+            </div>
             """
     else:
         deals_html = """
@@ -652,6 +724,31 @@ async def bitrix24_webhook(request: Request):
                 font-size: 14px;
             }}
             
+            .header-stats {{
+                margin-top: 16px;
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 16px;
+            }}
+            
+            .stat-item {{
+                background: rgba(255, 255, 255, 0.15);
+                padding: 12px;
+                border-radius: 8px;
+                backdrop-filter: blur(10px);
+            }}
+            
+            .stat-label {{
+                font-size: 12px;
+                opacity: 0.8;
+                margin-bottom: 4px;
+            }}
+            
+            .stat-value {{
+                font-size: 18px;
+                font-weight: 600;
+            }}
+            
             .accordion {{
                 margin-bottom: 16px;
             }}
@@ -725,6 +822,10 @@ async def bitrix24_webhook(request: Request):
                 padding: 0 20px 20px 20px;
             }}
             
+            .deal-card-wrapper {{
+                margin-bottom: 12px;
+            }}
+            
             .deal-card-link {{
                 text-decoration: none;
                 color: inherit;
@@ -735,7 +836,6 @@ async def bitrix24_webhook(request: Request):
                 background: white;
                 padding: 20px;
                 border-radius: 12px;
-                margin-bottom: 12px;
                 box-shadow: 0 2px 8px rgba(0,0,0,0.05);
                 transition: transform 0.2s, box-shadow 0.2s;
                 cursor: pointer;
@@ -744,6 +844,46 @@ async def bitrix24_webhook(request: Request):
             .deal-card-link:hover .deal-card {{
                 transform: translateY(-2px);
                 box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+            }}
+            
+            .payment-button {{
+                width: 100%;
+                margin-top: 8px;
+                padding: 10px 16px;
+                background: #27ae60;
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: 500;
+                cursor: pointer;
+                transition: background 0.2s;
+            }}
+            
+            .payment-button:hover {{
+                background: #229954;
+            }}
+            
+            .payment-button:active {{
+                transform: scale(0.98);
+            }}
+            
+            .payment-button:disabled {{
+                background: #95a5a6;
+                cursor: not-allowed;
+            }}
+            
+            .payment-done {{
+                display: block;
+                width: 100%;
+                margin-top: 8px;
+                padding: 10px 16px;
+                background: #ecf0f1;
+                color: #27ae60;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: 500;
+                text-align: center;
             }}
             
             .deal-header {{
@@ -828,12 +968,65 @@ async def bitrix24_webhook(request: Request):
                     content.classList.add('active');
                 }}
             }}
+            
+            async function markPaymentDone(event, dealId) {{
+                event.preventDefault();
+                event.stopPropagation();
+                
+                const button = event.target;
+                button.disabled = true;
+                button.textContent = 'Обработка...';
+                
+                try {{
+                    const response = await fetch('/api/mark-payment', {{
+                        method: 'POST',
+                        headers: {{
+                            'Content-Type': 'application/json',
+                        }},
+                        body: JSON.stringify({{ deal_id: dealId }})
+                    }});
+                    
+                    const result = await response.json();
+                    if (response.ok && result.success) {{
+                        const wrapper = button.closest('.deal-card-wrapper');
+                        button.outerHTML = '<span class="payment-done">✓ Выплата произведена</span>';
+                        // Обновляем страницу через 1 секунду для обновления статистики
+                        setTimeout(() => {{
+                            window.location.reload();
+                        }}, 1000);
+                    }} else {{
+                        throw new Error(result.error || 'Ошибка обновления');
+                    }}
+                }} catch (error) {{
+                    button.disabled = false;
+                    button.textContent = '✓ Выплата произведена';
+                    alert('Ошибка при обновлении статуса выплаты. Попробуйте обновить страницу.');
+                }}
+            }}
         </script>
     </head>
     <body>
         <div class="header">
             <h1>👋 {entity_info['name']}</h1>
             <p>Сделки и лиды в качестве партнера {entity_type}</p>
+            <div class="header-stats">
+                <div class="stat-item">
+                    <div class="stat-label">Процент партнера</div>
+                    <div class="stat-value">{partner_percent}%</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Успешные сделки</div>
+                    <div class="stat-value">{format_currency(success_amount, default_currency)}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">В работе</div>
+                    <div class="stat-value">{format_currency(in_progress_amount, default_currency)}</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-label">Выплачено</div>
+                    <div class="stat-value">{format_currency(paid_amount, default_currency)}</div>
+                </div>
+            </div>
         </div>
         
         <div class="accordion">
@@ -872,6 +1065,64 @@ async def bitrix24_webhook(request: Request):
     """
     
     return HTMLResponse(content=html_content)
+
+
+@app.post("/api/mark-payment")
+async def mark_payment(request: Request):
+    """
+    Endpoint для обновления статуса выплаты по сделке.
+    Устанавливает поле PARTNER_IS_PAYMENT в true.
+    """
+    try:
+        data = await request.json()
+        deal_id = data.get("deal_id")
+        
+        if not deal_id:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": "deal_id не указан"}
+            )
+        
+        # Получаем webhook URL из переменных окружения
+        webhook_url = os.getenv("WEBHOOK")
+        
+        if not webhook_url:
+            logger.error("WEBHOOK не задан в .env")
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": "WEBHOOK не настроен"}
+            )
+        
+        # Создаем клиент Битрикс24
+        bitrix = BitrixAsync(webhook_url)
+        
+        # Обновляем поле PARTNER_IS_PAYMENT
+        result = await bitrix.call("crm.deal.update", {
+            "ID": deal_id,
+            "fields": {
+                PARTNER_IS_PAYMENT_FIELD: True
+            }
+        })
+        
+        if result and "error" not in str(result):
+            logger.info(f"Выплата отмечена для сделки #{deal_id}")
+            return JSONResponse(
+                status_code=200,
+                content={"success": True, "deal_id": deal_id}
+            )
+        else:
+            logger.error(f"Ошибка обновления сделки #{deal_id}: {result}")
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": "Ошибка обновления сделки"}
+            )
+            
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении выплаты: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
 
 
 @app.get("/", response_class=HTMLResponse)
