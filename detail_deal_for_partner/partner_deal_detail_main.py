@@ -599,19 +599,19 @@ async def bitrix24_webhook(request: Request):
             payment_button_html = ""
             if not is_payment_bool:
                 payment_button_html = f"""
-                <button class="payment-button" onclick="markPaymentDone(event, '{deal_id}')">
-                    ✓ Выплата произведена
+                <button class="payment-button" onclick="markPaymentDone(event, '{deal_id}', {amount}, {partner_percent})">
+                    ✓ Выплата 
                 </button>
                 """
             else:
                 payment_button_html = """
-                <span class="payment-done">✓ Выплата произведена</span>
+                <span class="payment-done">✓ Выплачено</span>
                 """
             
             deals_html += f"""
-            <div class="deal-card-wrapper">
-                <a href="{deal_url}" class="deal-card-link" target="_blank">
-                    <div class="deal-card">
+            <div class="deal-card-wrapper" data-deal-id="{deal_id}" data-deal-amount="{amount}">
+                <div class="deal-card">
+                    <a href="{deal_url}" class="deal-card-link" target="_blank">
                         <div class="deal-header">
                             <div class="deal-title">{title}</div>
                             <div class="deal-amount">{format_currency(amount, currency)}</div>
@@ -622,9 +622,11 @@ async def bitrix24_webhook(request: Request):
                                 {stage_name}
                             </span>
                         </div>
+                    </a>
+                    <div class="deal-payment">
+                        {payment_button_html}
                     </div>
-                </a>
-                {payment_button_html}
+                </div>
             </div>
             """
     else:
@@ -825,38 +827,44 @@ async def bitrix24_webhook(request: Request):
                 margin-bottom: 12px;
             }}
             
-            .deal-card-link {{
-                text-decoration: none;
-                color: inherit;
-                display: block;
-            }}
-            
             .deal-card {{
                 background: white;
                 padding: 20px;
                 border-radius: 12px;
                 box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-                transition: transform 0.2s, box-shadow 0.2s;
-                cursor: pointer;
+                transition: box-shadow 0.2s;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 16px;
             }}
             
-            .deal-card-link:hover .deal-card {{
-                transform: translateY(-2px);
+            .deal-card:hover {{
                 box-shadow: 0 4px 16px rgba(0,0,0,0.1);
             }}
             
+            .deal-card-link {{
+                text-decoration: none;
+                color: inherit;
+                flex: 1;
+                min-width: 0;
+            }}
+            
+            .deal-payment {{
+                flex-shrink: 0;
+            }}
+            
             .payment-button {{
-                width: 100%;
-                margin-top: 8px;
-                padding: 10px 16px;
+                padding: 6px 12px;
                 background: #27ae60;
                 color: white;
                 border: none;
-                border-radius: 8px;
-                font-size: 14px;
+                border-radius: 6px;
+                font-size: 12px;
                 font-weight: 500;
                 cursor: pointer;
                 transition: background 0.2s;
+                white-space: nowrap;
             }}
             
             .payment-button:hover {{
@@ -864,7 +872,7 @@ async def bitrix24_webhook(request: Request):
             }}
             
             .payment-button:active {{
-                transform: scale(0.98);
+                transform: scale(0.95);
             }}
             
             .payment-button:disabled {{
@@ -873,16 +881,13 @@ async def bitrix24_webhook(request: Request):
             }}
             
             .payment-done {{
-                display: block;
-                width: 100%;
-                margin-top: 8px;
-                padding: 10px 16px;
+                padding: 6px 12px;
                 background: #ecf0f1;
                 color: #27ae60;
-                border-radius: 8px;
-                font-size: 14px;
+                border-radius: 6px;
+                font-size: 12px;
                 font-weight: 500;
-                text-align: center;
+                white-space: nowrap;
             }}
             
             .deal-header {{
@@ -968,13 +973,14 @@ async def bitrix24_webhook(request: Request):
                 }}
             }}
             
-            async function markPaymentDone(event, dealId) {{
+            async function markPaymentDone(event, dealId, dealAmount, partnerPercent) {{
                 event.preventDefault();
                 event.stopPropagation();
                 
                 const button = event.target;
+                const originalText = button.textContent;
                 button.disabled = true;
-                button.textContent = 'Обработка...';
+                button.textContent = '...';
                 
                 try {{
                     const response = await fetch('/api/mark-payment', {{
@@ -987,20 +993,58 @@ async def bitrix24_webhook(request: Request):
                     
                     const result = await response.json();
                     if (response.ok && result.success) {{
-                        const wrapper = button.closest('.deal-card-wrapper');
-                        button.outerHTML = '<span class="payment-done">✓ Выплата произведена</span>';
-                        // Обновляем страницу через 1 секунду для обновления статистики
-                        setTimeout(() => {{
-                            window.location.reload();
-                        }}, 1000);
+                        // Заменяем кнопку на статус "Выплачено"
+                        const paymentContainer = button.closest('.deal-payment');
+                        paymentContainer.innerHTML = '<span class="payment-done">✓ Выплачено</span>';
+                        
+                        // Обновляем статистику "Выплачено" в шапке
+                        updatePaidAmount(dealAmount, partnerPercent);
                     }} else {{
                         throw new Error(result.error || 'Ошибка обновления');
                     }}
                 }} catch (error) {{
                     button.disabled = false;
-                    button.textContent = '✓ Выплата произведена';
-                    alert('Ошибка при обновлении статуса выплаты. Попробуйте обновить страницу.');
+                    button.textContent = originalText;
+                    alert('Ошибка при обновлении статуса выплаты: ' + error.message);
                 }}
+            }}
+            
+            function updatePaidAmount(dealAmount, partnerPercent) {{
+                // Находим элемент со статистикой "Выплачено"
+                const paidStatItem = document.getElementById('paid-amount');
+                
+                if (paidStatItem) {{
+                    // Получаем текущее значение
+                    const currentText = paidStatItem.textContent.trim();
+                    // Извлекаем число из текста (убираем валюту и пробелы, заменяем запятую на точку)
+                    const cleaned = currentText.replace(/[^0-9.,]/g, '').replace(/,/g, '.');
+                    const currentAmount = parseFloat(cleaned) || 0;
+                    // Рассчитываем новую сумму (процент от суммы сделки)
+                    const paymentAmount = dealAmount * (partnerPercent / 100);
+                    const newAmount = currentAmount + paymentAmount;
+                    // Определяем валюту из текущего текста
+                    let currency = 'RUB';
+                    if (currentText.includes('$') || currentText.includes('USD')) {{
+                        currency = 'USD';
+                    }} else if (currentText.includes('€') || currentText.includes('EUR')) {{
+                        currency = 'EUR';
+                    }}
+                    // Форматируем и обновляем
+                    const formatted = formatCurrency(newAmount, currency);
+                    paidStatItem.textContent = formatted;
+                }}
+            }}
+            
+            function formatCurrency(amount, currency) {{
+                const currencySymbols = {{
+                    'RUB': '₽',
+                    'USD': '$',
+                    'EUR': '€'
+                }};
+                const symbol = currencySymbols[currency] || '₽';
+                // Форматируем число с пробелами как разделителями тысяч
+                const formatted = Math.round(amount).toLocaleString('ru-RU').replace(/,/g, ' ');
+                return formatted + ' ' + symbol;
             }}
         </script>
     </head>
@@ -1023,7 +1067,7 @@ async def bitrix24_webhook(request: Request):
                 </div>
                 <div class="stat-item">
                     <div class="stat-label">Выплачено</div>
-                    <div class="stat-value">{format_currency(paid_amount, default_currency)}</div>
+                    <div class="stat-value" id="paid-amount">{format_currency(paid_amount, default_currency)}</div>
                 </div>
             </div>
         </div>
