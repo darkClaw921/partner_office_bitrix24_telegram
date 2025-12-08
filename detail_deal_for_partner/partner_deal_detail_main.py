@@ -450,7 +450,7 @@ async def bitrix24_webhook(request: Request):
     Пример входных данных:
     {
         'AUTH_EXPIRES': '3600',
-        'AUTH_ID': '3887b068007b96ee007b49e800000001000007c425c8345a9600bd3f00fed57371e60d',
+        'AUTH_ID': '3887b068007b96ee007b49e800000001000007c425c8345a9600bd3f00fed57371e6',
         'PLACEMENT': 'CRM_CONTACT_DETAIL_TAB' или 'CRM_COMPANY_DETAIL_TAB',
         'PLACEMENT_OPTIONS': '{"ID":"123"}',
         'REFRESH_ID': '2806d868007b96ee007b49e800000001000007224ba3bff481836412123c08db5986e9',
@@ -554,8 +554,8 @@ async def bitrix24_webhook(request: Request):
         if not default_currency or default_currency == "RUB":
             default_currency = currency
         
-        # Проверяем статус выплаты (только для успешных сделок)
-        if ("WON" in stage_id or "SUCCESS" in stage_id) and (is_payment == "1" or is_payment == "Y" or is_payment is True):
+        # Проверяем статус выплаты (для всех сделок с выплатой)
+        if is_payment == "1" or is_payment == "Y" or is_payment is True:
             paid_amount += amount * (partner_percent / 100) if partner_percent > 0 else 0
         
         # Классифицируем сделки
@@ -595,19 +595,18 @@ async def bitrix24_webhook(request: Request):
             elif "LOSE" in stage_id.upper() or "FAIL" in stage_id.upper():
                 stage_color = "#e74c3c"  # Красный для проигранных
             
-            # Кнопка выплаты (активна только для успешных сделок, где выплата не произведена)
+            # Кнопка выплаты (показывается для всех сделок, где выплата не произведена)
             payment_button_html = ""
-            if is_success:
-                if not is_payment_bool:
-                    payment_button_html = f"""
-                    <button class="payment-button" onclick="markPaymentDone(event, '{deal_id}')">
-                        ✓ Выплата произведена
-                    </button>
-                    """
-                else:
-                    payment_button_html = """
-                    <span class="payment-done">✓ Выплата произведена</span>
-                    """
+            if not is_payment_bool:
+                payment_button_html = f"""
+                <button class="payment-button" onclick="markPaymentDone(event, '{deal_id}')">
+                    ✓ Выплата произведена
+                </button>
+                """
+            else:
+                payment_button_html = """
+                <span class="payment-done">✓ Выплата произведена</span>
+                """
             
             deals_html += f"""
             <div class="deal-card-wrapper">
