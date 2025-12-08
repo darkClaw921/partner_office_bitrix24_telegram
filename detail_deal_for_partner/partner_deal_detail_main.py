@@ -549,13 +549,15 @@ async def bitrix24_webhook(request: Request):
     for deal in deals:
         amount = float(deal.get("OPPORTUNITY", 0))
         stage_id = deal.get("STAGE_ID", "").upper()
-        is_payment = deal.get(PARTNER_IS_PAYMENT_FIELD, False)
+        # Поле PARTNER_IS_PAYMENT принимает значения "0" или "1"
+        is_payment = deal.get(PARTNER_IS_PAYMENT_FIELD, "0")
         currency = deal.get("CURRENCY_ID", "RUB")
         if not default_currency or default_currency == "RUB":
             default_currency = currency
         
         # Проверяем статус выплаты (для всех сделок с выплатой)
-        if is_payment == "1" or is_payment == "Y" or is_payment is True:
+        # Поле PARTNER_IS_PAYMENT принимает значения "0" или "1"
+        if is_payment == "1":
             paid_amount += amount * (partner_percent / 100) if partner_percent > 0 else 0
         
         # Классифицируем сделки
@@ -576,10 +578,11 @@ async def bitrix24_webhook(request: Request):
             currency = deal.get("CURRENCY_ID", "RUB")
             stage_id = deal.get("STAGE_ID", "")
             category_id = str(deal.get("CATEGORY_ID", "0"))
-            is_payment = deal.get(PARTNER_IS_PAYMENT_FIELD, False)
+            # Поле PARTNER_IS_PAYMENT принимает значения "0" или "1"
+            is_payment = deal.get(PARTNER_IS_PAYMENT_FIELD, "0")
             
             # Проверяем статус выплаты
-            is_payment_bool = is_payment == "1" or is_payment == "Y" or is_payment is True
+            is_payment_bool = is_payment == "1"
             
             # Получаем название стадии
             stage_name = stages_map.get(category_id, {}).get(stage_id, stage_id)
@@ -611,21 +614,23 @@ async def bitrix24_webhook(request: Request):
             deals_html += f"""
             <div class="deal-card-wrapper" data-deal-id="{deal_id}" data-deal-amount="{amount}">
                 <div class="deal-card">
-                    <a href="{deal_url}" class="deal-card-link" target="_blank">
-                        <div class="deal-header">
-                            <div class="deal-title">{title}</div>
-                            <div class="deal-amount">{format_currency(amount, currency)}</div>
-                        </div>
-                        <div class="deal-meta">
-                            <span class="deal-id">ID: {deal_id}</span>
-                            <span class="deal-stage" style="background-color: {stage_color}20; color: {stage_color};">
-                                {stage_name}
-                            </span>
-                        </div>
-                    </a>
                     <div class="deal-payment">
                         {payment_button_html}
                     </div>
+                    <a href="{deal_url}" class="deal-card-link" target="_blank">
+                        <div class="deal-content">
+                            <div class="deal-header">
+                                <div class="deal-title">{title}</div>
+                            </div>
+                            <div class="deal-meta">
+                                <span class="deal-id">ID: {deal_id}</span>
+                                <span class="deal-stage" style="background-color: {stage_color}20; color: {stage_color};">
+                                    {stage_name}
+                                </span>
+                            </div>
+                        </div>
+                        <div class="deal-amount">{format_currency(amount, currency)}</div>
+                    </a>
                 </div>
             </div>
             """
@@ -835,7 +840,6 @@ async def bitrix24_webhook(request: Request):
                 transition: box-shadow 0.2s;
                 display: flex;
                 align-items: center;
-                justify-content: space-between;
                 gap: 16px;
             }}
             
@@ -843,14 +847,31 @@ async def bitrix24_webhook(request: Request):
                 box-shadow: 0 4px 16px rgba(0,0,0,0.1);
             }}
             
+            .deal-payment {{
+                flex-shrink: 0;
+            }}
+            
             .deal-card-link {{
                 text-decoration: none;
                 color: inherit;
                 flex: 1;
                 min-width: 0;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 16px;
             }}
             
-            .deal-payment {{
+            .deal-content {{
+                flex: 1;
+                min-width: 0;
+            }}
+            
+            .deal-amount {{
+                font-size: 18px;
+                font-weight: 700;
+                color: #27ae60;
+                white-space: nowrap;
                 flex-shrink: 0;
             }}
             
@@ -891,9 +912,6 @@ async def bitrix24_webhook(request: Request):
             }}
             
             .deal-header {{
-                display: flex;
-                justify-content: space-between;
-                align-items: start;
                 margin-bottom: 12px;
             }}
             
@@ -901,15 +919,6 @@ async def bitrix24_webhook(request: Request):
                 font-size: 16px;
                 font-weight: 600;
                 color: #2c3e50;
-                flex: 1;
-                margin-right: 16px;
-            }}
-            
-            .deal-amount {{
-                font-size: 18px;
-                font-weight: 700;
-                color: #27ae60;
-                white-space: nowrap;
             }}
             
             .deal-meta {{
@@ -1140,10 +1149,11 @@ async def mark_payment(request: Request):
         bitrix = BitrixAsync(webhook_url)
         
         # Обновляем поле PARTNER_IS_PAYMENT
+        # Поле принимает значения "0" или "1"
         result = await bitrix.call("crm.deal.update", {
             "ID": deal_id,
             "fields": {
-                PARTNER_IS_PAYMENT_FIELD: True
+                PARTNER_IS_PAYMENT_FIELD: "1"
             }
         })
         
