@@ -24,7 +24,7 @@ PARTNER_CONTACT_CODE_FIELD = os.getenv("PARTNER_CONTACT_CODE_FIELD", "UF_CRM_176
 PARTNER_COMPANY_CODE_FIELD = os.getenv("PARTNER_COMPANY_CODE_FIELD", "UF_CRM_1763552640092")
 PARTNER_DEAL_REF_DEAL = os.getenv("PARTNER_DEAL_REF_DEAL", "UF_CRM_691F06D06BCAE")
 PARTNER_LEAD_REF_LEAD = os.getenv("PARTNER_LEAD_REF_LEAD", "UF_CRM_1763569075")
-
+PARTNER_URLS = os.getenv("PARTNER_URLS", "UF_CRM_1765210560")
 # Создаем папку для логов если её нет
 logs_dir = Path("logs")
 logs_dir.mkdir(exist_ok=True)
@@ -346,6 +346,40 @@ async def _update_company_partner_code(company_id: str, partner_code: str, bitri
         return False
 
 
+async def _update_deal_partner_url(deal_id: str, partner_code: str, bitrix: BitrixAsync) -> bool:
+    """Обновление поля PARTNER_URLS в сделке с URL партнера."""
+    try:
+        partner_url = f"https://auto-legal.ru/promo?utm_term={partner_code}"
+        logger.info(f"Обновление PARTNER_URLS для сделки {deal_id}: {partner_url}")
+        
+        update_data = {
+            "ID": deal_id,
+            "fields": {
+                PARTNER_URLS: partner_url
+            }
+        }
+        
+        result = await bitrix.call("crm.deal.update", update_data)
+        
+        if isinstance(result, bool) and result:
+            logger.info(f"PARTNER_URLS успешно обновлен для сделки {deal_id}")
+            return True
+        elif isinstance(result, dict):
+            if "error" in result:
+                error_msg = result.get("error_description", result.get("error"))
+                logger.error(f"Ошибка обновления PARTNER_URLS для сделки {deal_id}: {error_msg}")
+                return False
+            elif result.get("result") is True:
+                logger.info(f"PARTNER_URLS успешно обновлен для сделки {deal_id}")
+                return True
+        
+        logger.warning(f"Неожиданный ответ при обновлении PARTNER_URLS для сделки {deal_id}: {result}")
+        return False
+    except Exception as e:
+        logger.error(f"Исключение при обновлении PARTNER_URLS для сделки {deal_id}: {e}")
+        return False
+
+
 @app.post("/webhook")
 async def bitrix24_webhook(request: Request):
     """Обработчик webhook от Bitrix24 для привязки партнеров по UTM меткам."""
@@ -540,7 +574,8 @@ async def deal_webhook(request: Request):
     contact_id = deal_data.get("CONTACT_ID")
     if contact_id:
         contact_id = str(contact_id).strip()
-        if contact_id:
+        # Пропускаем пустые значения и "0" (в Bitrix24 "0" означает отсутствие привязки)
+        if contact_id and contact_id != "0":
             partner_code = f"ai-{contact_id}"
             success = await _update_contact_partner_code(contact_id, partner_code, bitrix)
             results.append({
@@ -550,12 +585,15 @@ async def deal_webhook(request: Request):
                 "success": success
             })
             logger.info(f"Обработан контакт {contact_id}, код партнера: {partner_code}")
+        else:
+            logger.debug(f"Контакт не привязан к сделке {deal_id} (CONTACT_ID={contact_id})")
     
     # Обрабатываем компанию, если она привязана
     company_id = deal_data.get("COMPANY_ID")
     if company_id:
         company_id = str(company_id).strip()
-        if company_id:
+        # Пропускаем пустые значения и "0" (в Bitrix24 "0" означает отсутствие привязки)
+        if company_id and company_id != "0":
             partner_code = f"ai-{company_id}"
             success = await _update_company_partner_code(company_id, partner_code, bitrix)
             results.append({
@@ -565,6 +603,8 @@ async def deal_webhook(request: Request):
                 "success": success
             })
             logger.info(f"Обработана компания {company_id}, код партнера: {partner_code}")
+        else:
+            logger.debug(f"Компания не привязана к сделке {deal_id} (COMPANY_ID={company_id})")
     
     # Если ни контакт, ни компания не привязаны
     if not results:
@@ -581,13 +621,31 @@ async def deal_webhook(request: Request):
     # Проверяем успешность всех операций
     all_success = all(r["success"] for r in results)
     
+    # Обновляем поле PARTNER_URLS в сделке с кодом партнера
+    # Приоритет отдаем контакту, если он обработан успешно, иначе используем компанию
+    partner_code_for_url = None
+    for result in results:
+        if result["success"]:
+            partner_code_for_url = result["partner_code"]
+            # Если это контакт, используем его код (приоритет контакту)
+            if result["type"] == "contact":
+                break
+    
+    if partner_code_for_url:
+        url_success = await _update_deal_partner_url(deal_id, partner_code_for_url, bitrix)
+        if not url_success:
+            logger.warning(f"Не удалось обновить PARTNER_URLS для сделки {deal_id}")
+    else:
+        logger.warning(f"Нет успешно обработанных партнеров для обновления PARTNER_URLS в сделке {deal_id}")
+    
     return JSONResponse(
         status_code=200 if all_success else 500,
         content={
             "success": all_success,
             "message": "Коды партнеров успешно обновлены" if all_success else "Частично успешное обновление",
             "deal_id": deal_id,
-            "results": results
+            "results": results,
+            "partner_url_updated": partner_code_for_url is not None
         }
     )
 
