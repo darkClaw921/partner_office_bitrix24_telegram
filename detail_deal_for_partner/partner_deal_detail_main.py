@@ -598,6 +598,9 @@ async def bitrix24_webhook(request: Request):
             elif "LOSE" in stage_id.upper() or "FAIL" in stage_id.upper():
                 stage_color = "#e74c3c"  # Красный для проигранных
             
+            # Рассчитываем сумму к выплате на основе процента партнера
+            payment_amount = amount * (partner_percent / 100) if partner_percent > 0 else 0
+            
             # Кнопка выплаты (показывается для всех сделок, где выплата не произведена)
             payment_button_html = ""
             if not is_payment_bool:
@@ -614,9 +617,6 @@ async def bitrix24_webhook(request: Request):
             deals_html += f"""
             <div class="deal-card-wrapper" data-deal-id="{deal_id}" data-deal-amount="{amount}">
                 <div class="deal-card">
-                    <div class="deal-payment">
-                        {payment_button_html}
-                    </div>
                     <a href="{deal_url}" class="deal-card-link" target="_blank">
                         <div class="deal-content">
                             <div class="deal-header">
@@ -629,8 +629,13 @@ async def bitrix24_webhook(request: Request):
                                 </span>
                             </div>
                         </div>
-                        <div class="deal-amount">{format_currency(amount, currency)}</div>
                     </a>
+                    <div class="deal-payment-section">
+                        <div class="deal-payment">
+                            {payment_button_html}
+                        </div>
+                        <div class="deal-amount">{format_currency(payment_amount, currency)}</div>
+                    </div>
                 </div>
             </div>
             """
@@ -856,10 +861,6 @@ async def bitrix24_webhook(request: Request):
                 color: inherit;
                 flex: 1;
                 min-width: 0;
-                display: flex;
-                align-items: center;
-                justify-content: space-between;
-                gap: 16px;
             }}
             
             .deal-content {{
@@ -867,12 +868,18 @@ async def bitrix24_webhook(request: Request):
                 min-width: 0;
             }}
             
+            .deal-payment-section {{
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                flex-shrink: 0;
+            }}
+            
             .deal-amount {{
                 font-size: 18px;
                 font-weight: 700;
                 color: #27ae60;
                 white-space: nowrap;
-                flex-shrink: 0;
             }}
             
             .payment-button {{
