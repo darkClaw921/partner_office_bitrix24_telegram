@@ -9,6 +9,7 @@ from fast_bitrix24 import BitrixAsync
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from loguru import logger
+from bitrix_utils import get_company, get_contact
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -25,6 +26,8 @@ PARTNER_COMPANY_CODE_FIELD = os.getenv("PARTNER_COMPANY_CODE_FIELD", "UF_CRM_176
 PARTNER_DEAL_REF_DEAL = os.getenv("PARTNER_DEAL_REF_DEAL", "UF_CRM_691F06D06BCAE")
 PARTNER_LEAD_REF_LEAD = os.getenv("PARTNER_LEAD_REF_LEAD", "UF_CRM_1763569075")
 PARTNER_URLS = os.getenv("PARTNER_URLS", "UF_CRM_1765210560")
+PARTNER_CONTACT_REF_FIELD=os.getenv('PARTNER_CONTACT_REF_FIELD')
+PARTNER_COMPANY_REF_FIELD=os.getenv('PARTNER_COMPANY_REF_FIELD')
 # Создаем папку для логов если её нет
 logs_dir = Path("logs")
 logs_dir.mkdir(exist_ok=True)
@@ -32,6 +35,16 @@ logs_dir.mkdir(exist_ok=True)
 # Настройка логирования
 logger.add("logs/utm_partner_binding.log", rotation="10 MB", retention="7 days", level="INFO")
 
+
+def generate_partner_links(partner_code:str)-> str:
+
+
+    urlsText=''
+    # WEBHOOK.split('/')
+    #если ссылка на промо ведет на сайт битрикса и вебхук тоже 
+    urlsText+=f"https://{WEBHOOK.split('/')[2]}/promo?utm_term={partner_code}\n"
+    return urlsText
+    
 
 async def _parse_request_data(request: Request) -> dict:
     """Парсинг тела запроса: JSON -> form-urlencoded -> raw/querystring.
@@ -349,7 +362,8 @@ async def _update_company_partner_code(company_id: str, partner_code: str, bitri
 async def _update_deal_partner_url(deal_id: str, partner_code: str, bitrix: BitrixAsync) -> bool:
     """Обновление поля PARTNER_URLS в сделке с URL партнера."""
     try:
-        partner_url = f"https://auto-legal.ru/promo?utm_term={partner_code}"
+        
+        partner_url=generate_partner_links(partner_code)
         logger.info(f"Обновление PARTNER_URLS для сделки {deal_id}: {partner_url}")
         
         update_data = {
@@ -378,6 +392,176 @@ async def _update_deal_partner_url(deal_id: str, partner_code: str, bitrix: Bitr
     except Exception as e:
         logger.error(f"Исключение при обновлении PARTNER_URLS для сделки {deal_id}: {e}")
         return False
+
+@app.post("/webhook/lead")
+async def bitrix24_webhook_lead(request: Request):
+    """Обработчик webhook от Bitrix24 для привязки партнеров по контаку или компании."""
+    # Парсим данные из запроса
+    data = await _parse_request_data(request)
+    
+    logger.info(f"Получен webhook от Bitrix24: {list(data.keys())}")
+    
+    # Извлекаем document_id
+    document_id_0 = data.get("document_id[0]", "")
+    document_id_1 = data.get("document_id[1]", "")
+    document_id_2 = data.get("document_id[2]", "")
+    
+    logger.info(f"document_id[0]={document_id_0}, document_id[1]={document_id_1}, document_id[2]={document_id_2}")
+    
+    # Определяем тип сущности
+    entity_type = _extract_entity_type(document_id_1)
+    if not entity_type:
+        error_msg = f"Неизвестный тип сущности: {document_id_1}"
+        logger.error(error_msg)
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": error_msg}
+        )
+    
+    # Извлекаем ID сущности
+    entity_id = _extract_entity_id(document_id_2)
+    if not entity_id:
+        error_msg = f"Не удалось извлечь ID из document_id[2]: {document_id_2}"
+        logger.error(error_msg)
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": error_msg}
+        )
+    
+    logger.info(f"Обработка {entity_type} с ID: {entity_id}")
+    
+    # Получаем webhook URL
+    webhook_url = _get_webhook_url(data)
+    if not webhook_url:
+        error_msg = "WEBHOOK не задан в хуке и в переменных окружения"
+        logger.error(error_msg)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": error_msg}
+        )
+    
+    # Создаем клиент Bitrix24
+    bitrix = BitrixAsync(webhook_url)
+    
+    # Получаем данные сущности (только для лидов)
+    if entity_type != "lead":
+        error_msg = f"Эндпоинт /webhook/lead обрабатывает только лиды, получен тип: {entity_type}"
+        logger.error(error_msg)
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": error_msg}
+        )
+    
+    entity_data = await _get_lead_data(entity_id, bitrix)
+    
+    if not entity_data:
+        error_msg = f"Не удалось получить данные лида с ID {entity_id}"
+        logger.error(error_msg)
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": error_msg}
+        )
+
+    partner = None
+    
+    # Проверяем привязку контакта
+    contact_id = entity_data.get("CONTACT_ID")
+    if contact_id:
+        contact_id = str(contact_id).strip()
+        # Пропускаем пустые значения и "0" (в Bitrix24 "0" означает отсутствие привязки)
+        if contact_id and contact_id != "0":
+            logger.info(f"Найден привязанный контакт {contact_id} к лиду {entity_id}")
+            
+            # Получаем данные контакта
+            contact_data = await get_contact(contact_id, bitrix)
+            if contact_data:
+                # Проверяем заполнено ли поле "пришел от партнера"
+                partner_ref_value = contact_data.get(PARTNER_CONTACT_REF_FIELD)
+                if partner_ref_value:
+                    partner_ref_value = str(partner_ref_value).strip()
+                    logger.info(f"В контакте {contact_id} найдено поле пришел от партнера: {partner_ref_value}")
+                    
+                    # Извлекаем ID партнера из значения (формат C_123 или CO_123)
+                    if partner_ref_value.startswith("C_") or partner_ref_value.startswith("CO_"):
+                        partner_ref_id = partner_ref_value.split("_")[1] if "_" in partner_ref_value else None
+                        
+                        if partner_ref_id:
+                            # Определяем тип партнера
+                            if partner_ref_value.startswith("CO_"):
+                                partner = {"type": "company", "id": partner_ref_id}
+                            else:
+                                partner = {"type": "contact", "id": partner_ref_id}
+                            logger.info(f"Найден партнер: тип={partner['type']}, id={partner['id']}")
+    
+    # Если не нашли через контакт, проверяем компанию
+    if not partner:
+        company_id = entity_data.get("COMPANY_ID")
+        if company_id:
+            company_id = str(company_id).strip()
+            if company_id and company_id != "0":
+                logger.info(f"Найдена привязанная компания {company_id} к лиду {entity_id}")
+                
+                # Получаем данные компании
+                company_data = await get_company(company_id, bitrix)
+                if company_data:
+                    # Проверяем заполнено ли поле "пришел от партнера"
+                    partner_ref_value = company_data.get(PARTNER_COMPANY_REF_FIELD)
+                    if partner_ref_value:
+                        partner_ref_value = str(partner_ref_value).strip()
+                        logger.info(f"В компании {company_id} найдено поле пришел от партнера: {partner_ref_value}")
+                        
+                        # Извлекаем ID партнера из значения (формат C_123 или CO_123)
+                        if partner_ref_value.startswith("C_") or partner_ref_value.startswith("CO_"):
+                            partner_ref_id = partner_ref_value.split("_")[1] if "_" in partner_ref_value else None
+                            
+                            if partner_ref_id:
+                                # Определяем тип партнера
+                                if partner_ref_value.startswith("CO_"):
+                                    partner = {"type": "company", "id": partner_ref_id}
+                                else:
+                                    partner = {"type": "contact", "id": partner_ref_id}
+                                logger.info(f"Найден партнер: тип={partner['type']}, id={partner['id']}")
+    
+    # Если нашли партнера, привязываем его к лиду
+    if partner:
+        success = await _bind_partner_to_lead(entity_id, partner, bitrix)
+        
+        if success:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "success": True,
+                    "message": f"Партнер успешно привязан к лиду",
+                    "lead_id": entity_id,
+                    "partner_type": partner["type"],
+                    "partner_id": partner["id"]
+                }
+            )
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "success": False,
+                    "error": f"Не удалось привязать партнера к лиду {entity_id}",
+                    "lead_id": entity_id,
+                    "partner_type": partner["type"],
+                    "partner_id": partner["id"]
+                }
+            )
+    
+    # Если партнер не найден
+    logger.warning(f"Партнер не найден для лида {entity_id}. Контакт или компания не привязаны, либо поле 'пришел от партнера' не заполнено.")
+    return JSONResponse(
+        status_code=200,
+        content={
+            "success": False,
+            "message": f"Партнер не найден для лида {entity_id}",
+            "lead_id": entity_id,
+            "reason": "Контакт или компания не привязаны, либо поле 'пришел от партнера' не заполнено"
+        }
+    )
+
+
 
 
 @app.post("/webhook")

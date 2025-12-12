@@ -97,6 +97,45 @@ async def update_lead_utm_term(
         logger.error(f"Исключение при обновлении UTM_TERM для лида {lead_id}: {e}")
         return False
 
+
+
+
+async def get_contact(contact_id, bitrix: BitrixAsync):
+    """Получение данных контакта по ID."""
+    try:
+        result = await bitrix.call('crm.contact.get', {'ID': contact_id})
+        if result.get("order0000000000") is not None:
+            result = result.get("order0000000000")
+        if result and isinstance(result, dict):
+            if "error" in result:
+                logger.error(f"Ошибка получения контакта {contact_id}: {result.get('error_description', result.get('error'))}")
+                return None
+            return result
+        logger.warning(f"Неожиданный формат ответа при получении контакта {contact_id}: {type(result)}")
+        return None
+    except Exception as e:
+        logger.error(f"Исключение при получении контакта {contact_id}: {e}")
+        return None
+
+async def get_company(company_id, bitrix: BitrixAsync):
+    """Получение данных компании по ID."""
+    try:
+        result = await bitrix.call('crm.company.get', {'ID': company_id})
+        if result.get("order0000000000") is not None:
+            result = result.get("order0000000000")
+        if result and isinstance(result, dict):
+            if "error" in result:
+                logger.error(f"Ошибка получения компании {company_id}: {result.get('error_description', result.get('error'))}")
+                return None
+            return result
+        logger.warning(f"Неожиданный формат ответа при получении компании {company_id}: {type(result)}")
+        return None
+    except Exception as e:
+        logger.error(f"Исключение при получении компании {company_id}: {e}")
+        return None
+
+
+
 if __name__ == "__main__":
     import os
     from dotenv import load_dotenv
